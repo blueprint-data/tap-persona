@@ -52,6 +52,13 @@ class PersonaPaginator(BaseAPIPaginator):
 class PersonaStream(RESTStream):
     """Base stream for Persona API."""
 
+    # Subclasses should override these to define incomplete statuses
+    incomplete_statuses = []
+    # Config key for initial ID boundary (e.g., "start_case_id")
+    start_id_config_key = None
+    # Track the boundary ID to stop pagination when encountered
+    _pagination_boundary_id = None
+
     @property
     def url_base(self) -> str:
         """Return base URL from config."""
@@ -78,6 +85,31 @@ class PersonaStream(RESTStream):
         """
         return PersonaPaginator()
 
+    def get_starting_incomplete_id(self, context: Optional[dict]) -> Optional[str]:
+        """Get the ID boundary for incremental sync.
+
+        Checks in order:
+        1. State: earliest_incomplete_id from previous run
+        2. Config: stream-specific start ID (start_case_id, start_inquiry_id)
+
+        Args:
+            context: Stream context containing state information.
+
+        Returns:
+            ID to use as pagination boundary, or None for full sync.
+        """
+        state = self.get_context_state(context)
+        state_id = state.get("earliest_incomplete_id")
+
+        if state_id:
+            return state_id
+
+        # On initial run, check config for starting ID
+        if self.start_id_config_key:
+            return self.config.get(self.start_id_config_key)
+
+        return None
+
     def get_url_params(
         self, context: Optional[dict], next_page_token: Optional[str]
     ) -> Dict[str, Any]:
@@ -85,6 +117,12 @@ class PersonaStream(RESTStream):
 
         Persona API uses bracket notation for nested parameters (JSON:API standard).
         For example: page[size]=100, page[after]=cursor123
+
+        Implements ID-based incremental sync strategy:
+        - Tracks the earliest incomplete record ID in state
+        - Uses page[before] to fetch records appearing before (newer than) that boundary
+        - Continues pagination until the boundary ID is encountered in results
+        - Avoids full refreshes while ensuring incomplete records are re-checked
 
         Args:
             context: Stream context (includes state for incremental sync).
@@ -101,23 +139,18 @@ class PersonaStream(RESTStream):
         # Add cursor for pagination using bracket notation
         if next_page_token:
             params["page[after]"] = next_page_token
-
-        # Add sort order for proper incremental replication
-        # Sort by replication key in ascending order (oldest to newest)
-        # This ensures the bookmark is always the most recent timestamp processed
-        if self.replication_key:
-            # Convert underscore to hyphen for API (updated_at → updated-at)
-            api_field_name = self.replication_key.replace("_", "-")
-            params["sort"] = api_field_name
-
-        # Add incremental sync filter using bracket notation
-        if self.replication_key:
-            start_value = self.get_starting_replication_key_value(context)
-            if start_value:
-                # Filter for records created/updated after the bookmark
-                # Convert underscore to hyphen for API (created_at → created-at)
-                api_field_name = self.replication_key.replace("_", "-")
-                params[f"filter[{api_field_name}][start]"] = start_value
+        else:
+            # On initial page, use ID boundary for incremental sync
+            # Store boundary ID to stop pagination when we encounter it
+            boundary_id = self.get_starting_incomplete_id(context)
+            if boundary_id:
+                self._pagination_boundary_id = boundary_id
+                # Use page[before] to fetch records before this ID in reverse-chronological list
+                # (i.e., newer records since API returns newest first)
+                params["page[before]"] = boundary_id
+                self.logger.info(
+                    f"Using ID boundary for incremental sync: {boundary_id}"
+                )
 
         return params
 
@@ -138,21 +171,41 @@ class PersonaStream(RESTStream):
         Persona API uses hyphenated field names (JSON:API convention).
         We normalize them to underscored names for consistency.
 
+        Since Persona API returns records in reverse chronological order
+        and doesn't support ascending sort, we collect and sort records
+        locally to ensure proper incremental replication.
+
+        Stops yielding records when the pagination boundary ID is encountered,
+        preventing infinite pagination during incremental syncs.
+
         Args:
             response: HTTP response from API.
 
         Yields:
-            Individual record dictionaries from the response.
+            Individual record dictionaries from the response, sorted by replication key.
         """
         data = response.json()
 
         # Persona API returns data in a 'data' array
         records = data.get("data", [])
 
+        flattened_records = []
+        boundary_reached = False
+
         for record in records:
+            record_id = record.get("id")
+
+            # Check if we've reached the pagination boundary
+            if self._pagination_boundary_id and record_id == self._pagination_boundary_id:
+                self.logger.info(
+                    f"Reached pagination boundary: {record_id}. Stopping pagination."
+                )
+                boundary_reached = True
+                break
+
             # Flatten the structure: combine id, type, and attributes
             flattened_record = {
-                "id": record.get("id"),
+                "id": record_id,
                 "type": record.get("type"),
             }
 
@@ -166,10 +219,30 @@ class PersonaStream(RESTStream):
             if "relationships" in record:
                 flattened_record["relationships"] = record["relationships"]
 
+            flattened_records.append(flattened_record)
+
+        # If boundary reached, clear the next link to stop pagination
+        if boundary_reached:
+            # Modify response data to remove next link
+            if "links" in data:
+                data["links"]["next"] = None
+
+        # Sort records by replication key in ascending order (oldest to newest)
+        # This ensures proper bookmark progression for incremental sync
+        if self.replication_key and flattened_records:
+            flattened_records.sort(
+                key=lambda x: x.get(self.replication_key) or "",
+                reverse=False
+            )
+
+        # Yield sorted records
+        for flattened_record in flattened_records:
             yield flattened_record
 
     def post_process(self, row: dict, context: Optional[dict] = None) -> Optional[dict]:
         """Transform record before output.
+
+        Also tracks the earliest incomplete record for ID-based incremental sync.
 
         Args:
             row: Record dictionary.
@@ -185,6 +258,33 @@ class PersonaStream(RESTStream):
         if row is not None:
             row["_sdc_extracted_at"] = datetime.now(timezone.utc).isoformat()
 
+            # Track earliest (oldest) incomplete record for ID-based incremental sync
+            if row.get("status") in self.incomplete_statuses:
+                state = self.get_context_state(context)
+                current_earliest_id = state.get("earliest_incomplete_id")
+                current_earliest_timestamp = state.get("earliest_incomplete_created_at")
+
+                # Use created_at to determine which record is older
+                # Store the ID for pagination purposes
+                row_timestamp = row.get("created_at")
+
+                if row_timestamp:
+                    # Update if this is the first incomplete record or if it's older
+                    should_update = (
+                        not current_earliest_timestamp or
+                        row_timestamp < current_earliest_timestamp
+                    )
+
+                    if should_update:
+                        state["earliest_incomplete_id"] = row["id"]
+                        state["earliest_incomplete_status"] = row.get("status")
+                        state["earliest_incomplete_created_at"] = row_timestamp
+                        state["earliest_incomplete_updated_at"] = row.get("updated_at")
+                        self.logger.info(
+                            f"Updating earliest incomplete: {row['id']} "
+                            f"(created: {row_timestamp}, status: {row.get('status')})"
+                        )
+
         return row
 
 
@@ -192,7 +292,12 @@ class InquiriesStream(PersonaStream):
     """Stream for Persona Inquiries.
 
     Extracts inquiry records with support for incremental replication
-    based on the updated_at timestamp field.
+    based on the updated_at timestamp field and earliest incomplete inquiry tracking.
+
+    For incremental sync:
+    - Tracks the earliest inquiry with "created" status
+    - Subsequent runs fetch only records newer than this boundary
+    - Ensures we always re-check incomplete inquiries while avoiding full refreshes
 
     API Endpoint: GET /inquiries
     """
@@ -201,6 +306,11 @@ class InquiriesStream(PersonaStream):
     path = "/inquiries"
     primary_keys = ["id"]
     replication_key = "updated_at"
+
+    # Incomplete statuses that should be re-checked on each sync
+    # "created" = inquiry started but not yet completed
+    incomplete_statuses = ["created", "pending", "needs_review"]
+    start_id_config_key = "start_inquiry_id"
 
     schema = th.PropertiesList(
         # Core fields
@@ -272,7 +382,12 @@ class CasesStream(PersonaStream):
     """Stream for Persona Cases.
 
     Extracts case records with support for incremental replication
-    based on the updated_at timestamp field.
+    based on the updated_at timestamp field and earliest open case tracking.
+
+    For incremental sync:
+    - Tracks the earliest case with "open" status
+    - Subsequent runs fetch only records newer than this boundary
+    - Ensures we always re-check open cases while avoiding full refreshes
 
     API Endpoint: GET /cases
     """
@@ -281,6 +396,11 @@ class CasesStream(PersonaStream):
     path = "/cases"
     primary_keys = ["id"]
     replication_key = "updated_at"
+
+    # Incomplete statuses that should be re-checked on each sync
+    # "Open" = case is still under review and not yet resolved
+    incomplete_statuses = ["Open"]
+    start_id_config_key = "start_case_id"
 
     schema = th.PropertiesList(
         # Core fields

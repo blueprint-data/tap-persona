@@ -1,5 +1,6 @@
 {
   "api_key": "your_persona_api_key_here",
-  "start_date": "2025-01-01T00:00:00Z",
-  "page_size": 100
+  "page_size": 100,
+  "start_case_id": "case_ABC123xyz...",
+  "start_inquiry_id": "inq_XYZ789abc..."
 }

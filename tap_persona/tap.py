@@ -30,15 +30,25 @@ class TapPersona(Tap):
             description="Base API URL for Persona",
         ),
         th.Property(
-            "start_date",
-            th.DateTimeType,
-            description="Earliest record date to sync (for incremental replication)",
-        ),
-        th.Property(
             "page_size",
             th.IntegerType,
             default=100,
             description="Number of records to fetch per page (default: 100)",
+        ),
+        # Optional ID-based starting points for initial sync
+        th.Property(
+            "start_inquiry_id",
+            th.StringType,
+            description="Inquiry ID to start from (for initial sync only). "
+            "Fetches all inquiries newer than this ID. "
+            "After first run, incremental sync uses state-based ID tracking.",
+        ),
+        th.Property(
+            "start_case_id",
+            th.StringType,
+            description="Case ID to start from (for initial sync only). "
+            "Fetches all cases newer than this ID. "
+            "After first run, incremental sync uses state-based ID tracking.",
         ),
     ).to_dict()
 
