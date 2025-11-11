@@ -1,6 +1,10 @@
 {
   "api_key": "your_persona_api_key_here",
   "page_size": 100,
-  "start_case_id": "case_ABC123xyz...",
-  "start_inquiry_id": "inq_XYZ789abc..."
+  "inquiries": {
+    "start_id": "inq_XYZ789abc..."
+  },
+  "cases": {
+    "start_id": "case_ABC123xyz..."
+  }
 }

@@ -35,20 +35,32 @@ class TapPersona(Tap):
             default=100,
             description="Number of records to fetch per page (default: 100)",
         ),
-        # Optional ID-based starting points for initial sync
+        # Optional stream-specific configuration
         th.Property(
-            "start_inquiry_id",
-            th.StringType,
-            description="Inquiry ID to start from (for initial sync only). "
-            "Fetches all inquiries newer than this ID. "
-            "After first run, incremental sync uses state-based ID tracking.",
+            "inquiries",
+            th.ObjectType(
+                th.Property(
+                    "start_id",
+                    th.StringType,
+                    description="Inquiry ID to start from (for initial sync only). "
+                    "Fetches all inquiries newer than this ID. "
+                    "After first run, incremental sync uses state-based ID tracking.",
+                )
+            ),
+            description="Configuration for the inquiries stream",
         ),
         th.Property(
-            "start_case_id",
-            th.StringType,
-            description="Case ID to start from (for initial sync only). "
-            "Fetches all cases newer than this ID. "
-            "After first run, incremental sync uses state-based ID tracking.",
+            "cases",
+            th.ObjectType(
+                th.Property(
+                    "start_id",
+                    th.StringType,
+                    description="Case ID to start from (for initial sync only). "
+                    "Fetches all cases newer than this ID. "
+                    "After first run, incremental sync uses state-based ID tracking.",
+                )
+            ),
+            description="Configuration for the cases stream",
         ),
     ).to_dict()
 

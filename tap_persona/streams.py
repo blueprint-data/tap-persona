@@ -16,6 +16,7 @@ class PersonaPaginator(BaseAPIPaginator):
     Persona API uses cursor-based pagination with a 'next' link in the response
     that contains a 'page[after]' query parameter with the cursor token.
     """
+    _boundary_reached = False
 
     def __init__(self, *args, **kwargs):
         """Initialize paginator."""
@@ -30,6 +31,10 @@ class PersonaPaginator(BaseAPIPaginator):
         Returns:
             Next page cursor string, or None if no more pages.
         """
+        # If boundary was reached, stop pagination
+        if self._boundary_reached:
+            return None
+
         data = response.json()
 
         # Persona uses cursor-based pagination in the 'links' object
@@ -47,6 +52,12 @@ class PersonaPaginator(BaseAPIPaginator):
             return after_param
 
         return None
+    
+
+    # Set the boundary reached flag to stop pagination
+    def set_boundary_reached(self) -> None:
+        """Set the boundary reached flag."""
+        self._boundary_reached = True
 
 
 class PersonaStream(RESTStream):
@@ -54,10 +65,10 @@ class PersonaStream(RESTStream):
 
     # Subclasses should override these to define incomplete statuses
     incomplete_statuses = []
-    # Config key for initial ID boundary (e.g., "start_case_id")
-    start_id_config_key = None
     # Track the boundary ID to stop pagination when encountered
     _pagination_boundary_id = None
+    # Store paginator instance to control pagination
+    _paginator_instance = None
 
     @property
     def url_base(self) -> str:
@@ -83,14 +94,15 @@ class PersonaStream(RESTStream):
         Returns:
             PersonaPaginator instance for handling cursor-based pagination.
         """
-        return PersonaPaginator()
+        self._paginator_instance = PersonaPaginator()
+        return self._paginator_instance
 
     def get_starting_incomplete_id(self, context: Optional[dict]) -> Optional[str]:
         """Get the ID boundary for incremental sync.
 
         Checks in order:
         1. State: earliest_incomplete_id from previous run
-        2. Config: stream-specific start ID (start_case_id, start_inquiry_id)
+        2. Config: stream-specific start ID from nested config (e.g., inquiries.start_id)
 
         Args:
             context: Stream context containing state information.
@@ -104,9 +116,11 @@ class PersonaStream(RESTStream):
         if state_id:
             return state_id
 
-        # On initial run, check config for starting ID
-        if self.start_id_config_key:
-            return self.config.get(self.start_id_config_key)
+        # On initial run, check config for starting ID in nested structure
+        # Look for config like: {"inquiries": {"start_id": "inq_123"}}
+        stream_config = self.config.get(self.name, {})
+        if isinstance(stream_config, dict):
+            return stream_config.get("start_id")
 
         return None
 
@@ -175,8 +189,9 @@ class PersonaStream(RESTStream):
         and doesn't support ascending sort, we collect and sort records
         locally to ensure proper incremental replication.
 
-        Stops yielding records when the pagination boundary ID is encountered,
-        preventing infinite pagination during incremental syncs.
+        During incremental syncs, includes records up to and including the
+        pagination boundary ID, then stops to prevent infinite pagination.
+        The boundary record is included to capture any updates to it.
 
         Args:
             response: HTTP response from API.
@@ -194,14 +209,6 @@ class PersonaStream(RESTStream):
 
         for record in records:
             record_id = record.get("id")
-
-            # Check if we've reached the pagination boundary
-            if self._pagination_boundary_id and record_id == self._pagination_boundary_id:
-                self.logger.info(
-                    f"Reached pagination boundary: {record_id}. Stopping pagination."
-                )
-                boundary_reached = True
-                break
 
             # Flatten the structure: combine id, type, and attributes
             flattened_record = {
@@ -221,11 +228,20 @@ class PersonaStream(RESTStream):
 
             flattened_records.append(flattened_record)
 
-        # If boundary reached, clear the next link to stop pagination
-        if boundary_reached:
-            # Modify response data to remove next link
-            if "links" in data:
-                data["links"]["next"] = None
+            # Check if we've reached the pagination boundary AFTER adding the record
+            # This ensures we include the boundary record itself (to get its latest state)
+            if self._pagination_boundary_id and record_id == self._pagination_boundary_id:
+                self.logger.info(
+                    f"Reached pagination boundary: {record_id}. Including boundary record and stopping pagination."
+                )
+                boundary_reached = True
+                break
+
+        # If boundary reached, signal the paginator to stop
+        if boundary_reached and self._paginator_instance:
+            self.logger.info("Boundary reached, signaling paginator to stop")
+            self.logger.info(f"Boundary ID: {self._pagination_boundary_id}")
+            self._paginator_instance.set_boundary_reached()
 
         # Sort records by replication key in ascending order (oldest to newest)
         # This ensures proper bookmark progression for incremental sync
@@ -310,7 +326,6 @@ class InquiriesStream(PersonaStream):
     # Incomplete statuses that should be re-checked on each sync
     # "created" = inquiry started but not yet completed
     incomplete_statuses = ["created", "pending", "needs_review"]
-    start_id_config_key = "start_inquiry_id"
 
     schema = th.PropertiesList(
         # Core fields
@@ -400,7 +415,6 @@ class CasesStream(PersonaStream):
     # Incomplete statuses that should be re-checked on each sync
     # "Open" = case is still under review and not yet resolved
     incomplete_statuses = ["Open"]
-    start_id_config_key = "start_case_id"
 
     schema = th.PropertiesList(
         # Core fields
