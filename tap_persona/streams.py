@@ -193,6 +193,9 @@ class PersonaStream(RESTStream):
         pagination boundary ID, then stops to prevent infinite pagination.
         The boundary record is included to capture any updates to it.
 
+        Note: The 'include' parameter is not supported on list endpoints.
+        Related resources are available via the 'relationships' field (IDs only).
+
         Args:
             response: HTTP response from API.
 
@@ -377,8 +380,80 @@ class InquiriesStream(PersonaStream):
         # Relationships and metadata
         th.Property(
             "relationships",
-            th.ObjectType(),
-            description="Related resources (verifications, reports, etc.)",
+            th.ObjectType(
+                # Verifications relationship (array)
+                th.Property("verifications", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Reports relationship (array)
+                th.Property("reports", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Sessions relationship (array)
+                th.Property("sessions", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Documents relationship (array)
+                th.Property("documents", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Selfies relationship (array)
+                th.Property("selfies", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Inquiry Template relationship
+                th.Property("inquiry-template", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+                # Inquiry Template Version relationship
+                th.Property("inquiry-template-version", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+                # Account relationship
+                th.Property("account", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+                # Reviewer relationship
+                th.Property("reviewer", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+                # Creator relationship
+                th.Property("creator", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+            ),
+            description="Related resources with their IDs and types (JSON:API format). "
+            "Each relationship contains a 'data' field with type and id information.",
         ),
 
         # Extraction metadata
@@ -457,8 +532,87 @@ class CasesStream(PersonaStream):
         # Relationships and metadata
         th.Property(
             "relationships",
-            th.ObjectType(),
-            description="Related resources",
+            th.ObjectType(
+                # Case Template relationship
+                th.Property("case-template", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+                # Case Queue relationship
+                th.Property("case-queue", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+                # Case Comments relationship (array)
+                th.Property("case-comments", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Accounts relationship (array)
+                th.Property("accounts", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Inquiries relationship (array)
+                th.Property("inquiries", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Reports relationship (array)
+                th.Property("reports", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Verifications relationship (array)
+                th.Property("verifications", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Transactions relationship (array)
+                th.Property("txns", th.ObjectType(
+                    th.Property("data", th.ArrayType(th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    )))
+                )),
+                # Creator relationship
+                th.Property("creator", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+                # Assignee relationship
+                th.Property("assignee", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+                # Reviewer relationship
+                th.Property("reviewer", th.ObjectType(
+                    th.Property("data", th.ObjectType(
+                        th.Property("type", th.StringType),
+                        th.Property("id", th.StringType),
+                    ))
+                )),
+            ),
+            description="Related resources with their IDs and types (JSON:API format). "
+            "Each relationship contains a 'data' field with type and id information.",
         ),
 
         # Extraction metadata

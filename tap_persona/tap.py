@@ -47,7 +47,9 @@ class TapPersona(Tap):
                     "After first run, incremental sync uses state-based ID tracking.",
                 )
             ),
-            description="Configuration for the inquiries stream",
+            description="Configuration for the inquiries stream. "
+            "Note: The Persona API does not support the 'include' parameter on list endpoints. "
+            "Related resources are available via the 'relationships' field (IDs only).",
         ),
         th.Property(
             "cases",
@@ -60,7 +62,9 @@ class TapPersona(Tap):
                     "After first run, incremental sync uses state-based ID tracking.",
                 )
             ),
-            description="Configuration for the cases stream",
+            description="Configuration for the cases stream. "
+            "Note: The Persona API does not support the 'include' parameter on list endpoints. "
+            "Related resources are available via the 'relationships' field (IDs only).",
         ),
     ).to_dict()
 
