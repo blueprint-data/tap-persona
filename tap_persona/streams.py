@@ -376,6 +376,11 @@ class InquiriesStream(PersonaStream):
         th.Property("address_subdivision", th.StringType, description="State/Province"),
         th.Property("address_postal_code", th.StringType, description="Postal code"),
         th.Property("birthdate", th.DateType, description="Date of birth"),
+        th.Property(
+            "tags",
+            th.ArrayType(th.StringType),
+            description="Custom string labels applied to the inquiry",
+        ),
 
         # Relationships and metadata
         th.Property(
@@ -527,6 +532,11 @@ class CasesStream(PersonaStream):
             "case_template_version_id",
             th.StringType,
             description="Version ID of the case template",
+        ),
+        th.Property(
+            "tags",
+            th.ArrayType(th.StringType),
+            description="Custom string labels applied to the case",
         ),
 
         # Relationships and metadata
