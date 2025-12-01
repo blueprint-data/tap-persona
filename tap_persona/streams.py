@@ -258,6 +258,35 @@ class PersonaStream(RESTStream):
         for flattened_record in flattened_records:
             yield flattened_record
 
+    def _increment_stream_state(
+        self,
+        latest_record: dict,
+        *,
+        context: Optional[dict] = None,
+    ) -> None:
+        """Update stream state with both replication key and custom fields.
+
+        This override ensures that our custom state fields (earliest_incomplete_id, etc.)
+        are persisted along with the standard replication key bookmark.
+
+        Args:
+            latest_record: The latest record processed.
+            context: Stream context.
+        """
+        # Get state before parent updates it, to preserve custom fields
+        state = self.get_context_state(context)
+        custom_state = {
+            k: v for k, v in state.items()
+            if k.startswith("earliest_incomplete_")
+        }
+
+        # Let parent class update the replication key bookmark
+        super()._increment_stream_state(latest_record, context=context)
+
+        # Restore custom fields after parent update
+        state = self.get_context_state(context)
+        state.update(custom_state)
+
     def post_process(self, row: dict, context: Optional[dict] = None) -> Optional[dict]:
         """Transform record before output.
 
