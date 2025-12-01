@@ -258,34 +258,30 @@ class PersonaStream(RESTStream):
         for flattened_record in flattened_records:
             yield flattened_record
 
-    def _increment_stream_state(
-        self,
-        latest_record: dict,
-        *,
-        context: Optional[dict] = None,
-    ) -> None:
-        """Update stream state with both replication key and custom fields.
+    def _finalize_state(self, state: Optional[dict] = None) -> None:
+        """Finalize state while preserving custom fields.
 
-        This override ensures that our custom state fields (earliest_incomplete_id, etc.)
-        are persisted along with the standard replication key bookmark.
+        The SDK's default finalization only keeps replication_key and replication_key_value.
+        We need to preserve our custom earliest_incomplete_* fields.
 
         Args:
-            latest_record: The latest record processed.
-            context: Stream context.
+            state: State object to finalize.
         """
-        # Get state before parent updates it, to preserve custom fields
-        state = self.get_context_state(context)
-        custom_state = {
-            k: v for k, v in state.items()
-            if k.startswith("earliest_incomplete_")
-        }
+        # Preserve custom fields before parent finalization
+        if state:
+            custom_fields = {
+                k: v for k, v in state.items()
+                if k.startswith("earliest_incomplete_")
+            }
+        else:
+            custom_fields = {}
 
-        # Let parent class update the replication key bookmark
-        super()._increment_stream_state(latest_record, context=context)
+        # Let parent finalize (this will keep only replication_key fields)
+        super()._finalize_state(state)
 
-        # Restore custom fields after parent update
-        state = self.get_context_state(context)
-        state.update(custom_state)
+        # Restore custom fields after finalization
+        if state and custom_fields:
+            state.update(custom_fields)
 
     def post_process(self, row: dict, context: Optional[dict] = None) -> Optional[dict]:
         """Transform record before output.
