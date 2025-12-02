@@ -134,9 +134,10 @@ class PersonaStream(RESTStream):
 
         Implements ID-based incremental sync strategy:
         - Tracks the earliest incomplete record ID in state
-        - Uses page[before] to fetch records appearing before (newer than) that boundary
-        - Continues pagination until the boundary ID is encountered in results
-        - Avoids full refreshes while ensuring incomplete records are re-checked
+        - Starts from newest records (no page parameter on first request)
+        - Paginates forward with page[after] (newest to oldest)
+        - Stops when the boundary ID is encountered in results
+        - This fetches all new records AND re-checks incomplete ones
 
         Args:
             context: Stream context (includes state for incremental sync).
@@ -154,16 +155,17 @@ class PersonaStream(RESTStream):
         if next_page_token:
             params["page[after]"] = next_page_token
         else:
-            # On initial page, use ID boundary for incremental sync
-            # Store boundary ID to stop pagination when we encounter it
+            # On initial page, set boundary ID for incremental sync
+            # We'll paginate from newest to oldest and stop when we hit this boundary
             boundary_id = self.get_starting_incomplete_id(context)
             if boundary_id:
                 self._pagination_boundary_id = boundary_id
-                # Use page[before] to fetch records before this ID in reverse-chronological list
-                # (i.e., newer records since API returns newest first)
-                params["page[before]"] = boundary_id
                 self.logger.info(
-                    f"Using ID boundary for incremental sync: {boundary_id}"
+                    f"Starting incremental sync - will paginate until boundary: {boundary_id}"
+                )
+            else:
+                self.logger.info(
+                    "No boundary ID found - performing full sync"
                 )
 
         return params
@@ -185,13 +187,15 @@ class PersonaStream(RESTStream):
         Persona API uses hyphenated field names (JSON:API convention).
         We normalize them to underscored names for consistency.
 
-        Since Persona API returns records in reverse chronological order
-        and doesn't support ascending sort, we collect and sort records
-        locally to ensure proper incremental replication.
+        Persona API returns records in reverse chronological order (newest first).
+        For incremental syncs:
+        - We start from the newest records
+        - Paginate forward (going towards older records)
+        - Stop when we encounter the boundary ID (earliest incomplete record)
+        - The boundary record is included to capture any updates to it
 
-        During incremental syncs, includes records up to and including the
-        pagination boundary ID, then stops to prevent infinite pagination.
-        The boundary record is included to capture any updates to it.
+        Records are sorted locally by replication key (oldest to newest) to ensure
+        proper bookmark progression for the Singer SDK.
 
         Note: The 'include' parameter is not supported on list endpoints.
         Related resources are available via the 'relationships' field (IDs only).
@@ -273,6 +277,10 @@ class PersonaStream(RESTStream):
                 k: v for k, v in state.items()
                 if k.startswith("earliest_incomplete_")
             }
+            if custom_fields:
+                self.logger.info(
+                    f"[{self.name}] Preserving {len(custom_fields)} custom state fields before finalization"
+                )
         else:
             custom_fields = {}
 
@@ -282,6 +290,9 @@ class PersonaStream(RESTStream):
         # Restore custom fields after finalization
         if state and custom_fields:
             state.update(custom_fields)
+            self.logger.info(
+                f"[{self.name}] Restored custom state fields after finalization: {custom_fields.get('earliest_incomplete_id', 'none')}"
+            )
 
     def post_process(self, row: dict, context: Optional[dict] = None) -> Optional[dict]:
         """Transform record before output.
@@ -339,9 +350,10 @@ class InquiriesStream(PersonaStream):
     based on the updated_at timestamp field and earliest incomplete inquiry tracking.
 
     For incremental sync:
-    - Tracks the earliest inquiry with "created" status
-    - Subsequent runs fetch only records newer than this boundary
-    - Ensures we always re-check incomplete inquiries while avoiding full refreshes
+    - Tracks the earliest inquiry with incomplete status (created, pending, needs_review)
+    - Subsequent runs start from newest records and paginate until the boundary
+    - This fetches all new records AND re-checks incomplete inquiries
+    - Avoids full table scans while ensuring incomplete records are re-synced
 
     API Endpoint: GET /inquiries
     """
@@ -505,9 +517,10 @@ class CasesStream(PersonaStream):
     based on the updated_at timestamp field and earliest open case tracking.
 
     For incremental sync:
-    - Tracks the earliest case with "open" status
-    - Subsequent runs fetch only records newer than this boundary
-    - Ensures we always re-check open cases while avoiding full refreshes
+    - Tracks the earliest case with "Open" status
+    - Subsequent runs start from newest records and paginate until the boundary
+    - This fetches all new records AND re-checks open cases
+    - Avoids full table scans while ensuring open cases are re-synced
 
     API Endpoint: GET /cases
     """
